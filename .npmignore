@@ -15,6 +15,7 @@ bower_components
 .lock-wscript
 build/Release
 node_modules/
+jspm_packages/
 typings/
 .npm
 .eslintcache
@@ -23,3 +24,6 @@ typings/
 .yarn-integrity
 .env
 .idea
+out
+gen
+.git
