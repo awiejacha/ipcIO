@@ -14,8 +14,16 @@ const COMMAND_ERROR = "error";
 const bcast_registry = {};
 
 /**
+ * @typedef {object} parsed_message
+ * @property {string|null} id       Client id, that server is tagging handshake message with.
+ * @property {string|null} command  Command description.
+ * @property {string|null} data     Data carried by message.
+ */
+
+/**
+ * Takes message from other party and returns as prepared message.
  * @param {Buffer|string} message
- * @returns {object} parsed_message
+ * @returns {parsed_message} parsed_message
  */
 function parseMsg(message) {
     if (message instanceof Buffer) {
@@ -35,24 +43,24 @@ function parseMsg(message) {
         if (parsed_json.constructor === Array) {
             return parsed_json.map((entry) => {
 
-                    // Rejects null and primitives.
-                    if (entry && typeof entry === "object") {
-                return {
-                    id: entry.id || null,
-                    command: entry.command || null,
-                    data: entry.data || null,
-                };
-            }
+                // Case of object. Null is falsey, so will be rejected if does not fulfill first part of condition.
+                if (entry && typeof entry === "object") {
+                    return {
+                        id: entry.id || null,
+                        command: entry.command || null,
+                        data: entry.data || null,
+                    };
+                }
 
-            // Case of null and non-objects.
-        else {
-                return {
-                    id: null,
-                    command: null,
-                    data: entry === null ? null : entry.toString(), // Let it be null or string, no other choice.
-                };
-            }
-        })
+                // Case of null and non-objects.
+                else {
+                    return {
+                        id: null,
+                        command: null,
+                        data: entry === null ? null : entry.toString(), // Let it be null or string, no other choice.
+                    };
+                }
+            })
         }
         else {
             return [{
@@ -71,6 +79,10 @@ function parseMsg(message) {
     }
 }
 
+/**
+ * Returns parsed_message depending how many arguments are passed to it.
+ * @returns {parsed_message}
+ */
 function prepareMsg() {
     if (arguments.length === 0) {
         throw new Error(`No arguments passed.`);
@@ -92,7 +104,7 @@ function prepareMsg() {
         });
     }
 
-    if (arguments.length === 3) {
+    if (arguments.length >= 3) {
         return JSON.stringify({
             id: arguments[0].toString(),
             command: arguments[1].toString(),
@@ -101,6 +113,20 @@ function prepareMsg() {
     }
 }
 
+/**
+ * @typedef {object} iface
+ * @property {Socket} socket    Instance of net.Socket
+ * @property {Server} server    Instance of net.Server
+ */
+
+/**
+ * Always called with "this" bound to either IpcServer or IpcClient instance.
+ * Checks if "this" has handler for command carried by passed message registered. If so, handler is called.
+ * @param {string} uuid
+ * @param {string} client_name
+ * @param {iface} iface
+ * @param {parsed_message} message
+ */
 function executeCommandHandlers(uuid, client_name, iface, message) {
     if (typeof message === "object" && message !== null && message.command !== null && message.command !== undefined) {
         if (this._command_handlers[message.command] !== undefined) {
@@ -115,6 +141,12 @@ function executeCommandHandlers(uuid, client_name, iface, message) {
     }
 }
 
+/**
+ * Always called with "this" bound to either IpcServer or IpcClient instance.
+ * Adds command handler to handler collection.
+ * @param {string} command      Command name.
+ * @param {function} handler    Handler function.
+ */
 function addCommandHandler(command, handler) {
     if (typeof command !== "string") {
         throw new Error(`Argument passed as "command" must be a string.`);
@@ -131,6 +163,15 @@ function addCommandHandler(command, handler) {
     this._command_handlers[command] = handler;
 }
 
+/**
+ * @typedef {object} handler_collection
+ * @property {function} [command]
+ */
+
+/**
+ * Adds handlers grouped in collection.
+ * @param handler_collection
+ */
 function addHandlers(handler_collection) {
     if (typeof handler_collection !== "object" || handler_collection === null) {
         throw new Error(`Argument passed as "handler_collection" must be an object.`);
@@ -138,10 +179,6 @@ function addHandlers(handler_collection) {
 
     for (let command in handler_collection) {
         if (handler_collection.hasOwnProperty(command)) {
-            if (typeof command !== "string") {
-                throw new Error(`"handler_collection" entries must be keyed by strings.`);
-            }
-
             if (typeof handler_collection[command] !== "function") {
                 throw new Error(`"handler_collection" entry values must be callable.`);
             }
@@ -151,16 +188,29 @@ function addHandlers(handler_collection) {
     }
 }
 
-function $onUniqueData(uuid, client_name, entry, buffer) {
+/**
+ * On "data" event handler for IpcServer and IpcClient unique socket.
+ * Always called with "this" bound to either IpcServer or IpcClient instance.
+ * @param {string} uuid         Unique id of socket used for 1 to 1 communication with server, UUDv4/wo dashes.
+ * @param {string} client_name  Friendly name of client, if passed into client constructor, otherwise UUDv4/wo dashes.
+ * @param {iface} iface         Interface containing socket instance and server instance.
+ * @param {Buffer} buffer       Data buffer received from remote party with "data" event.
+ */
+function $onUniqueData(uuid, client_name, iface, buffer) {
 
     console.log(`Unique received: ${buffer.toString()}`);
 
     let message_array = parseMsg(buffer);
     message_array.forEach((message) => {
-        executeCommandHandlers.call(this, uuid, client_name, entry, message);
-}, this);
+        executeCommandHandlers.call(this, uuid, client_name, iface, message);
+    }, this);
 }
 
+/**
+ * On "connect" event handler for IpcServer broadcast socket creation callback.
+ * Always called with "this" bound to IpcServer instance.
+ * @param {Socket} bcastSocket
+ */
 function $onServerBcastCreation(bcastSocket) {
 
     // Give each client unique id. Id will also be used to establish private communication channel.
@@ -174,39 +224,69 @@ function $onServerBcastCreation(bcastSocket) {
 
     bcastSocket
         .on("data", $onServerBcastData.bind(this, uuid, bcastSocket))
-        .on("close", () => {
-        if (bcast_registry[this._domain][uuid] !== undefined) {
-        delete bcast_registry[this._domain][uuid];
-    }
-})
-.on("error", (error) => {
-        //TODO: Handle this.
-        console.log(error);
-})
+        .on("close", $onServerBcastClose.bind(this, uuid))
+        .on("error", $onServerBcastError.bind(this))
     ;
 }
 
+/**
+ * On "data" event handler for IpcServer handshake/broadcast socket.
+ * Always called with "this" bound to IpcServer instance.
+ * @param {string} uuid         Unique id of socket used for 1 to 1 communication with server, UUDv4/wo dashes.
+ * @param {Socket} bcastSocket  Socket used by IpcServer as handshaking/broadcast channel.
+ * @param {Buffer} buffer       Data buffer received from remote party with "data" event.
+ */
 function $onServerBcastData(uuid, bcastSocket, buffer) {
     let message_array = parseMsg(buffer);
 
     console.log(`${this._domain}: RECV ${JSON.stringify(message_array)}`);
 
     message_array.forEach((message) => {
+
+        // Handshaking.
         if (message.command === COMMAND_HANDSHAKE) {
-        let client_name = message.data;
-        this._name_registry[client_name] = uuid;
-        this._uuid_registry[uuid] = {};
-        this._uuid_registry[uuid].server = net.createServer($onServerUniqueCreation.bind(this, uuid, client_name));
-        this._uuid_registry[uuid].server.listen(`${this._bcast_path}.${uuid}`);
+            let client_name = message.data;
+            this._name_registry[client_name] = uuid;
+            this._uuid_registry[uuid] = {};
+            this._uuid_registry[uuid].server = net.createServer($onServerUniqueCreation.bind(this, uuid, client_name));
+            this._uuid_registry[uuid].server.listen(`${this._bcast_path}.${uuid}`);
 
-        console.log(`Client uuid server listening on ${this._bcast_path}.${uuid}`);
-        console.log(`Sending channel uuid ${uuid} to client ${client_name}.`);
+            console.log(`Client uuid server listening on ${this._bcast_path}.${uuid}`);
+            console.log(`Sending channel uuid ${uuid} to client ${client_name}.`);
 
-        bcastSocket.write(prepareMsg(client_name, COMMAND_HANDSHAKE, uuid), this._encoding);
-    }
-}, this);
+            bcastSocket.write(prepareMsg(client_name, COMMAND_HANDSHAKE, uuid), this._encoding);
+        }
+    }, this);
 }
 
+/**
+ * On "close" event handler for IpcServer handshake/broadcast socket.
+ * Always called with "this" bound to IpcServer instance.
+ * @param {string} uuid Unique id of socket used for 1 to 1 communication with server, UUDv4/wo dashes.
+ */
+function $onServerBcastClose(uuid) {
+    if (bcast_registry[this._domain][uuid] !== undefined) {
+        delete bcast_registry[this._domain][uuid];
+    }
+}
+
+/**
+ * On "error" event handler for IpcServer handshake/broadcast socket.
+ * @param error
+ */
+function $onServerBcastError(error) {
+    //TODO: Handle this.
+    console.log(error);
+}
+
+/**
+ * On "connect" event handler for IpcServer unique socket creation callback.
+ * Always called with "this" bound to IpcServer instance.
+ * @param {string} uuid                 Unique id of socket used for 1 to 1 communication with server, UUDv4/wo dashes.
+ * @param {string} client_name          Friendly name of client, if passed into client constructor,
+ *                                      otherwise UUDv4/wo dashes.
+ * @param {Socket} serverUniqueSocket   Socket used for 1 to 1 communication with each client.
+ */
 function $onServerUniqueCreation(uuid, client_name, serverUniqueSocket) {
     this._uuid_registry[uuid].socket = serverUniqueSocket;
     this._uuid_registry[uuid].socket._populated_handlers = {};
@@ -215,11 +295,18 @@ function $onServerUniqueCreation(uuid, client_name, serverUniqueSocket) {
     // clientUniqueSocket is to be really unique.
     this._uuid_registry[uuid].server.close();
     serverUniqueSocket
-        .on("close", $onServerUniqueClose.bind(this, uuid, client_name))
         .on("data", $onUniqueData.bind(this, uuid, client_name, this._uuid_registry[uuid]))
+        .on("close", $onServerUniqueClose.bind(this, uuid, client_name))
+        .on("error", $onServerUniqueError.bind(this))
     ;
 }
 
+/**
+ * On "close" event handler for IpcServer client communication socket.
+ * Always called with "this" bound to IpcServer instance.
+ * @param {string} uuid         Unique id of socket used for 1 to 1 communication with server, UUDv4/wo dashes.
+ * @param {string} client_name  Friendly name of client, if passed into client constructor, otherwise UUDv4/wo dashes.
+ */
 function $onServerUniqueClose(uuid, client_name) {
     if (this._name_registry[client_name] !== undefined) {
         delete this._name_registry[client_name];
@@ -234,15 +321,64 @@ function $onServerUniqueClose(uuid, client_name) {
     }
 }
 
+/**
+ * On "error" event handler for IpcServer client communication socket.
+ * @param error
+ */
+function $onServerUniqueError(error) {
+    //TODO: Handle this.
+    console.log(error);
+}
+
 class IpcServer {
     constructor(options = {}, handlers_collection = {}) {
+
+        /**
+         * @type {{}}
+         * @private
+         */
         this._name_registry = {};
+
+        /**
+         * @type {{}}
+         * @private
+         */
         this._uuid_registry = {};
+
+        /**
+         * @type {string}
+         * @private
+         */
         this._encoding = options.encoding || "utf8";
+
+        /**
+         * @type {*}
+         * @private
+         */
         this._domain = options.domain || DOMAIN_DEFAULT;
+
+        /**
+         * @type {string}
+         * @private
+         */
         this._bcast_path = `${TMP_PATH}.${this._domain}`;
+
+        /**
+         * @type {null}
+         * @private
+         */
         this._bcastServer = null;
+
+        /**
+         * @type {boolean}
+         * @private
+         */
         this._is_connected = false;
+
+        /**
+         * @type {{}}
+         * @private
+         */
         this._command_handlers = {};
 
         if (handlers_collection) {
@@ -306,13 +442,13 @@ function sendQueueEntry() {
             // Get rid of sent message only if write was successful.
             this._queue.shift();
 
-        if (!this._queue.length) {
-            this._emptying_queue = false;
-        }
-        else {
-            sendQueueEntry.call(this);
-        }
-    });
+            if (!this._queue.length) {
+                this._emptying_queue = false;
+            }
+            else {
+                sendQueueEntry.call(this);
+            }
+        });
     }
     else {
         this._emptying_queue = false;
@@ -330,16 +466,16 @@ function $onClientBcastConnect() {
 
     this._bcastSocket
         .on("data", (buffer) => {
-        let message_array = parseMsg(buffer);
-    message_array.forEach((message) => {
-        if (message.command === COMMAND_HANDSHAKE && message.id === this._client_name) {
-        this._channel_id = message.data;
-        this._uniqueSocket = spawnClientSocket.call(this);
-        this._uniqueSocket
-            .connect(`${this._bcast_path}.${this._channel_id}`, $onClientUniqueConnect.bind(this));
-    }
-}, this);
-})
+            let message_array = parseMsg(buffer);
+            message_array.forEach((message) => {
+                if (message.command === COMMAND_HANDSHAKE && message.id === this._client_name) {
+                    this._channel_id = message.data;
+                    this._uniqueSocket = spawnClientSocket.call(this);
+                    this._uniqueSocket
+                        .connect(`${this._bcast_path}.${this._channel_id}`, $onClientUniqueConnect.bind(this));
+                }
+            }, this);
+        })
     ;
 
     this._bcastSocket.write(prepareMsg(COMMAND_HANDSHAKE, this._client_name), this._encoding);
@@ -379,18 +515,18 @@ function $onClientOffline() {
     // Assign reconnect handler with timeout.
     this._offlinePollingFn = setTimeout(() => {
 
-            console.log(`Attempting to reconnect`);
+        console.log(`Attempting to reconnect`);
 
-    // Now we may claim that we are trying to connect.
-    this._is_connecting = true;
+        // Now we may claim that we are trying to connect.
+        this._is_connecting = true;
 
-    // spawnClientSocket produces socket already handling "finish", "close" and "error"
-    // events using $onClientOffline handler.
-    // That means that if socket will fail to connect or fail to operate,
-    // we will return eventually here.
-    this._bcastSocket = spawnClientSocket.call(this);
-    this._bcastSocket.connect(this._bcast_path, $onClientBcastConnect.bind(this));
-}, 2000);
+        // spawnClientSocket produces socket already handling "finish", "close" and "error"
+        // events using $onClientOffline handler.
+        // That means that if socket will fail to connect or fail to operate,
+        // we will return eventually here.
+        this._bcastSocket = spawnClientSocket.call(this);
+        this._bcastSocket.connect(this._bcast_path, $onClientBcastConnect.bind(this));
+    }, 2000);
 }
 
 function $onClientUniqueConnect() {
@@ -404,7 +540,10 @@ function $onClientUniqueConnect() {
     handleQueue.call(this);
 
     this._uniqueSocket
-        .on("data", $onUniqueData.bind(this, this._channel_id, this._client_name, this._uniqueSocket))
+        .on("data", $onUniqueData.bind(this, this._channel_id, this._client_name, {
+            socket: this._uniqueSocket,
+            server: this._uniqueSocket.server || null,
+        }))
     ;
 }
 
