@@ -21,7 +21,7 @@ const bcast_registry = {};
 /**
  * Takes message from other party and returns as prepared message.
  * @param {Buffer|string} message
- * @returns {parsed_message} parsed_message
+ * @returns {[...parsed_message]} parsed_message
  */
 function parseMsg(message) {
   if (message instanceof Buffer) {
@@ -58,7 +58,7 @@ function parseMsg(message) {
             data: entry === null ? null : entry.toString(), // Let it be null or string, no other choice.
           };
         }
-      })
+      });
     }
     else {
       return [{
@@ -113,8 +113,8 @@ function prepareMsg() {
 
 /**
  * @typedef {object} iface
- * @property {Socket} socket    Instance of net.Socket
- * @property {Server} server    Instance of net.Server
+ * @property {Socket} socket  Instance of net.Socket
+ * @property {Server} server  Instance of net.Server
  */
 
 /**
@@ -142,8 +142,8 @@ function executeCommandHandlers(uuid, client_name, iface, message) {
 /**
  * Always called with "this" bound to either IpcServer or IpcClient instance.
  * Adds command handler to handler collection.
- * @param {string} command      Command name.
- * @param {function} handler    Handler function.
+ * @param {string} command    Command name.
+ * @param {function} handler  Handler function.
  */
 function addCommandHandler(command, handler) {
   if (typeof command !== "string") {
@@ -289,9 +289,10 @@ function $onServerUniqueCreation(uuid, client_name, serverUniqueSocket) {
   this._uuid_registry[uuid].socket = serverUniqueSocket;
   this._uuid_registry[uuid].socket._populated_handlers = {};
 
-  // Do not accept new sockets.
+  // Close means "do not accept new sockets".
   // clientUniqueSocket is to be really unique.
   this._uuid_registry[uuid].server.close();
+
   serverUniqueSocket
     .on("data", $onUniqueData.bind(this, uuid, client_name, this._uuid_registry[uuid]))
     .on("close", $onServerUniqueClose.bind(this, uuid, client_name))
@@ -332,37 +333,43 @@ class IpcServer {
   constructor(options = {}, handlers_collection = {}) {
 
     /**
-     * @type {{}}
+     * Registry of client friendly name <=> uuid pairs.
+     * @type {object}
      * @private
      */
     this._name_registry = {};
 
     /**
-     * @type {{}}
+     * Registry of interfaces (server and its sockets), keyed by client uuids.
+     * @type {object}
      * @private
      */
     this._uuid_registry = {};
 
     /**
+     * Message encoding.
      * @type {string}
      * @private
      */
     this._encoding = options.encoding || "utf8";
 
     /**
-     * @type {*}
+     * Server broadcast domain.
+     * @type {string}
      * @private
      */
     this._domain = options.domain || DOMAIN_DEFAULT;
 
     /**
+     * Path to unix socket file handler.
      * @type {string}
      * @private
      */
     this._bcast_path = `${TMP_PATH}.${this._domain}`;
 
     /**
-     * @type {null}
+     * Broadcast domain server, used for handshaking and message broadcasting.
+     * @type {null|Server}
      * @private
      */
     this._bcastServer = null;
@@ -371,14 +378,16 @@ class IpcServer {
      * @type {boolean}
      * @private
      */
-    this._is_connected = false;
+    this._is_started = false;
 
     /**
-     * @type {{}}
+     * Collection of command handlers, passed to constructor or addHandler method.
+     * @type {object}
      * @private
      */
     this._command_handlers = {};
 
+    // If collection of handlers is passed as second argument, add it immediately.
     if (handlers_collection) {
       this.addHandlers(handlers_collection);
     }
@@ -388,7 +397,7 @@ class IpcServer {
    * @returns {IpcServer}
    */
   start() {
-    if (this._is_connected) {
+    if (this._is_started) {
       throw new Error(`Tried to start IPC server for domain ${this._domain}, that has already started.`);
     }
 
@@ -401,13 +410,28 @@ class IpcServer {
 
     console.log(`Broadcast server listening on ${this._bcast_path}`);
 
+    this._is_started = true;
+
     return this;
   }
 
+  /**
+   * Adds handlers at any time, regardless client state.s
+   * @param handler_collection
+   * @returns {IpcServer}
+   */
   addHandlers(handler_collection) {
     addHandlers.call(this, handler_collection);
 
     return this;
+  }
+
+  emit(client_friendly_name, command, data) {
+    // TODO: Implement.
+  }
+
+  broadcast(command, data) {
+    // TODO: Implement.
   }
 }
 
@@ -426,13 +450,10 @@ function spawnClientSocket() {
   return socket;
 }
 
-function handleQueue() {
-  if (this._is_connected && this._queue.length && !this._emptying_queue) {
-    this._emptying_queue = true;
-    sendQueueEntry.call(this)
-  }
-}
-
+/**
+ * Checks if there is possibility to successfully write queue entry to socket.
+ * If so, writes to socket and initialized writing next entry, when socket is able to respond with response.
+ */
 function sendQueueEntry() {
   if (this._is_connected && this._queue.length) {
     this._uniqueSocket.write(this._queue[0], this._encoding, () => {
@@ -453,32 +474,20 @@ function sendQueueEntry() {
   }
 }
 
-function $onClientBcastConnect() {
-  console.log(`Connected to broadcast server ${this._bcast_path}`);
-
-  // Server has connected us, so If any timeout with reconnect handler is still set, clear it.
-  if (this._offlinePollingFn !== null) {
-    clearTimeout(this._offlinePollingFn);
-    this._offlinePollingFn = null;
+/**
+ * Checks if there is possibility to successfully emit messages. If so, begins emitting process.
+ */
+function handleQueue() {
+  if (this._is_connected && this._queue.length && !this._emptying_queue) {
+    this._emptying_queue = true;
+    sendQueueEntry.call(this);
   }
-
-  this._bcastSocket
-    .on("data", (buffer) => {
-      let message_array = parseMsg(buffer);
-      message_array.forEach((message) => {
-        if (message.command === COMMAND_HANDSHAKE && message.id === this._client_name) {
-          this._channel_id = message.data;
-          this._uniqueSocket = spawnClientSocket.call(this);
-          this._uniqueSocket
-            .connect(`${this._bcast_path}.${this._channel_id}`, $onClientUniqueConnect.bind(this));
-        }
-      }, this);
-    })
-  ;
-
-  this._bcastSocket.write(prepareMsg(COMMAND_HANDSHAKE, this._client_name), this._encoding);
 }
 
+/**
+ * On "finish", "close", "error" events handler for IpcClient communication sockets.
+ * Always called with "this" bound to IpcClient instance.
+ */
 function $onClientOffline() {
 
   // We are offline, so we are not connected.
@@ -527,6 +536,41 @@ function $onClientOffline() {
   }, 2000);
 }
 
+/**
+ * On "connect" event handler for IpcClient handshake/broadcast socket callback.
+ * Always called with "this" bound to IpcClient instance.
+ */
+function $onClientBcastConnect() {
+
+  console.log(`Connected to broadcast server ${this._bcast_path}`);
+
+  // Server has connected us, so If any timeout with reconnect handler is still set, clear it.
+  if (this._offlinePollingFn !== null) {
+    clearTimeout(this._offlinePollingFn);
+    this._offlinePollingFn = null;
+  }
+
+  this._bcastSocket
+    .on("data", (buffer) => {
+      let message_array = parseMsg(buffer);
+      message_array.forEach((message) => {
+        if (message.command === COMMAND_HANDSHAKE && message.id === this._client_name) {
+          this._channel_id = message.data;
+          this._uniqueSocket = spawnClientSocket.call(this);
+          this._uniqueSocket
+            .connect(`${this._bcast_path}.${this._channel_id}`, $onClientUniqueConnect.bind(this));
+        }
+      }, this);
+    })
+  ;
+
+  this._bcastSocket.write(prepareMsg(COMMAND_HANDSHAKE, this._client_name), this._encoding);
+}
+
+/**
+ * On "connect" event handler for IpcClient unique socket callback.
+ * Always called with "this" bound to IpcClient instance.
+ */
 function $onClientUniqueConnect() {
 
   // Client unique socket has just been hand-shaken therefore we have stopped connecting and are connected.
@@ -601,33 +645,47 @@ class IpcClient {
 
     /**
      * Queue of messages.
-     * @type {Array}
+     * @type {array}
      * @private
      */
     this._queue = [];
 
     /**
+     * Socket used as basic communication layer between server and client, used for handshaking/broadcasting.
      * @type {Socket}
      * @private
      */
-    this._bcastSocket = undefined;
+    this._bcastSocket = null;
 
     /**
+     * Socket used for exclusive, 1 to 1 communication with server.
      * @type {Socket}
      * @private
-     s         */
+     */
     this._uniqueSocket = null;
 
     /**
+     * Collection of command handlers, passed to constructor or addHandler method.
      * @type {object}
      * @private
      */
     this._command_handlers = {};
 
+    /**
+     * Handler assigned each time client looses connection and tries to reconnect. Is nullified when connection is back.
+     * @type {null|function}
+     * @private
+     */
     this._offlinePollingFn = null;
 
+    /**
+     * Message encoding.
+     * @type {string}
+     * @private
+     */
     this._encoding = options.encoding || "utf8";
 
+    // If collection of handlers is passed as second argument, add it immediately.
     if (handlers_collection) {
       this.addHandlers(handlers_collection);
     }
@@ -648,12 +706,23 @@ class IpcClient {
     return this;
   }
 
+  /**
+   * Adds handlers at any time, regardless client state.s
+   * @param handler_collection
+   * @returns {IpcClient}
+   */
   addHandlers(handler_collection) {
     addHandlers.call(this, handler_collection);
 
     return this;
   }
 
+  /**
+   * Puts command with data queue, calls queue handler.
+   * Command is emitted immediately when there is connection established and previous entries become emitted.
+   * @param command
+   * @param data
+   */
   emit(command, data) {
     this._queue.push(prepareMsg(command, data));
     handleQueue.call(this);
