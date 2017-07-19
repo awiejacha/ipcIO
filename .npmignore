@@ -27,3 +27,4 @@ typings/
 out
 gen
 .git
+test-*.js
