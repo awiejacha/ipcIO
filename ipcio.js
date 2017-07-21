@@ -1,3 +1,44 @@
+/**
+ * @module ipcIO
+ */
+
+/**
+ * @typedef {object} parsed_message
+ * @property {string|null} id       Client id, that server is tagging handshake message with.
+ * @property {string|null} command  Command description.
+ * @property {string|null} data     Data carried by message.
+ */
+
+/**
+ * @typedef {parsed_message[]} parsed_message_array
+ */
+
+/**
+ * @typedef {object} iface
+ * @property {Socket} socket  Instance of net.Socket
+ * @property {Server} server  Instance of net.Server
+ */
+
+/**
+ * @typedef {object} handler_container
+ * @property {string} data        Message data
+ * @property {string} client_name Friendly name of client/uuid if name not set.
+ * @property {Socket} socket      Instance of net.Socket
+ * @property {Server} server      Instance of net.Server
+ */
+
+/**
+ * @typedef {object} handler_collection
+ * @property {function} [command]
+ */
+
+/**
+ * @typedef {object} server_constructor_options
+ * @property {boolean}  verbose   When true, will feed console with current operations feedback.
+ * @property {string}   domain    Namespace used for connection with all clients handshaking with this server.
+ * @property {string}   encoding  Message buffer encoding, defaults to "utf8".
+ */
+
 const net = require("net");
 const fs = require("fs");
 const uuidV4 = require("uuid").v4;
@@ -18,16 +59,9 @@ function feedConsole(...args) {
 }
 
 /**
- * @typedef {object} parsed_message
- * @property {string|null} id       Client id, that server is tagging handshake message with.
- * @property {string|null} command  Command description.
- * @property {string|null} data     Data carried by message.
- */
-
-/**
  * Takes message from other party and returns as prepared message.
  * @param {Buffer|string} message
- * @returns {[...parsed_message]} parsed_message
+ * @returns {parsed_message_array}
  */
 function parseMsg(message) {
   if (message instanceof Buffer) {
@@ -118,12 +152,6 @@ function prepareMsg() {
 }
 
 /**
- * @typedef {object} iface
- * @property {Socket} socket  Instance of net.Socket
- * @property {Server} server  Instance of net.Server
- */
-
-/**
  * Always called with "this" bound to either IpcServer or IpcClient instance.
  * Checks if "this" has handler for command carried by passed message registered. If so, handler is called.
  * @param {string} uuid
@@ -166,11 +194,6 @@ function addCommandHandler(command, handler) {
 
   this._command_handlers[command] = handler;
 }
-
-/**
- * @typedef {object} handler_collection
- * @property {function} [command]
- */
 
 /**
  * Adds handlers grouped in collection.
@@ -294,6 +317,9 @@ function $onServerBcastError(error) {
 function $onServerUniqueCreation(uuid, client_name, serverUniqueSocket) {
   this._uuid_registry[uuid].socket = serverUniqueSocket;
   this._uuid_registry[uuid].socket._populated_handlers = {};
+  this._uuid_registry[uuid].socket.writeCommand = function (command, data, callback) {
+    return this.write(prepareMsg(command, data), callback);
+  }.bind(this._uuid_registry[uuid].socket);
 
   // Close means "do not accept new sockets".
   // clientUniqueSocket is to be really unique.
@@ -335,8 +361,41 @@ function $onServerUniqueError(error) {
   feedConsole.call(this, error);
 }
 
+/**
+ * @classdesc Inter-Process-Communication Server
+ * @alias module:ipcIO.Server
+ */
 class IpcServer {
-  constructor(options = {}, handlers_collection = {}) {
+  /**
+   * Creates new instance of ipcIO Server.<br>
+   * Each handler passed to handler_collection receives `handler_collection` as an argument.<br>
+   * If no domain passed to options, domain named "default" is used.
+   * @example
+   * ```js
+   * const exampleServer = new ipcio.Server({
+   *     verbose: true,             // Determines if actions are reported to console,
+   *     domain: "example_domain",  // domain name,
+   *     encoding: "utf8",          // message encoding.
+   *   },
+   *    {
+   *      example_request_command: (container) => { // {command: function(container)}
+   *
+   *        // @typedef {object} container
+   *        // @property {string} data        Message data
+   *        // @property {string} client_name Friendly name of client/uuid if name not set.
+   *        // @property {Socket} socket      Instance of net.Socket
+   *        // @property {Server} server      Instance of net.Server
+   *
+   *        // Do handler logic here.
+   *      },
+   *    })
+   *    ;
+   * ```
+   * @constructor
+   * @param {server_constructor_options} options    Determines operating properties and behavior.
+   * @param {handler_collection} handler_collection Handlers to be registered at construction time.
+   */
+  constructor(options = {}, handler_collection = {}) {
     /**
      * When true, will feed the console.
      * @type {boolean}
@@ -399,13 +458,13 @@ class IpcServer {
     this._command_handlers = {};
 
     // If collection of handlers is passed as second argument, add it immediately.
-    if (handlers_collection) {
-      this.addHandlers(handlers_collection);
+    if (handler_collection) {
+      this.addHandlers(handler_collection);
     }
   }
 
   /**
-   * @returns {IpcServer}
+   * @returns {module:ipcIO.IpcServer}
    */
   start() {
     if (this._is_started) {
@@ -429,7 +488,7 @@ class IpcServer {
   /**
    * Adds handlers at any time, regardless client state.s
    * @param handler_collection
-   * @returns {IpcServer}
+   * @returns {module:ipcIO.IpcServer}
    */
   addHandlers(handler_collection) {
     addHandlers.call(this, handler_collection);
@@ -442,6 +501,7 @@ class IpcServer {
    * @param {string} client_name  Friendly name of client.
    * @param {string|null} command Command description.
    * @param {string|null} data    Data carried by message.
+   * @returns {module:ipcIO.IpcServer}
    */
   emit(client_name, command, data) {
     if (
@@ -455,12 +515,15 @@ class IpcServer {
         prepareMsg(command, data), this._encoding
       );
     }
+
+    return this;
   }
 
   /**
    * Writes to all client sockets within server domain.
    * @param {string|null} command Command description.
    * @param {string|null} data    Data carried by message.
+   * @returns {module:ipcIO.IpcServer}
    */
   broadcast(command, data) {
     for (let uuid in this._uuid_registry) {
@@ -471,8 +534,12 @@ class IpcServer {
         this._uuid_registry[uuid].socket.write(prepareMsg(command, data), this._encoding);
       }
     }
+
+    return this;
   }
 }
+
+module.exports.Server = IpcServer;
 
 /**
  * Spawns socket and returns it with already assigned offline behavior related handler.
@@ -628,8 +695,18 @@ function $onClientUniqueConnect() {
   ;
 }
 
+/**
+ * @classdesc Inter-Process-Communication Client
+ * @alias module:ipcIO.Client
+ */
 class IpcClient {
-  constructor(options = {}, handlers_collection = {}) {
+  /**
+   * IpcClient constructor
+   * @constructor
+   * @param {object} options
+   * @param {handler_collection} handler_collection
+   */
+  constructor(options = {}, handler_collection = {}) {
     /**
      * When true, will feed the console.
      * @type {boolean}
@@ -731,14 +808,25 @@ class IpcClient {
     this._encoding = options.encoding || "utf8";
 
     // If collection of handlers is passed as second argument, add it immediately.
-    if (handlers_collection) {
-      this.addHandlers(handlers_collection);
+    if (handler_collection) {
+      this.addHandlers(handler_collection);
     }
   }
 
   /**
+   * Adds handlers at any time, regardless client state.s
+   * @param handler_collection
+   * @returns {module:ipcIO.IpcClient}
+   */
+  addHandlers(handler_collection) {
+    addHandlers.call(this, handler_collection);
+
+    return this;
+  }
+
+  /**
    * Connect client to the server.
-   * @returns {IpcClient}
+   * @returns {module:ipcIO.IpcClient}
    */
   connect() {
     if (this._is_connecting || this._is_connected) {
@@ -752,29 +840,18 @@ class IpcClient {
   }
 
   /**
-   * Adds handlers at any time, regardless client state.s
-   * @param handler_collection
-   * @returns {IpcClient}
-   */
-  addHandlers(handler_collection) {
-    addHandlers.call(this, handler_collection);
-
-    return this;
-  }
-
-  /**
    * Puts command with data queue, calls queue handler.
    * Command is emitted immediately when there is connection established and previous entries become emitted.
    * @param {string|null} command Command description.
    * @param {string|null} data    Data carried by message.
+   * @returns {module:ipcIO.IpcClient}
    */
   emit(command, data) {
     this._queue.push(prepareMsg(command, data));
     handleQueue.call(this);
+
+    return this;
   }
 }
 
-module.exports = {
-  Server: IpcServer,
-  Client: IpcClient,
-};
+module.exports.Client = IpcClient;
