@@ -1,7 +1,7 @@
 # ipcIO
 Server and client for unix-domain-based inter-process-communication (IPC).
 
-# Sounds scary. What does it do to my project?
+## Sounds scary. What does it do to my project?
 Provides layer of connectivity, conducted in the same favor as unix processes use to communicate. This is called the __Inter Process Communication (IPC)__.
 Basic nodejs *net* library, literally *net.Server* and *net.Socket*, can, aside "regular" TCP sockets, provide the same functionality. To be honest, *ipcIO* uses them underneath.
 What makes this package worth attention, is the way of dealing with *handlers*, special functions passed to *net* classes and asynchronicity.
@@ -10,7 +10,7 @@ It is possible to emit or broadcasts commands by just calling *ipcIO* `emit` or 
 Servers create, within their __domain__ two levels of connectivity. First one is used to handshake and broadcast to all clients in domain, second is unique to each server-client pair.
 Much influence for me gave me __SocketIO__ project. Hence the name?
 
-# Jump-in tutorial
+## Jump-in tutorial
 
 * Install package:
 
@@ -18,7 +18,7 @@ Much influence for me gave me __SocketIO__ project. Hence the name?
 
 * Create server code, let's name it `test-server.js`:
 
-```javascript
+```js
 const ipcio = require("ipcio");
 const exampleServer = new ipcio.Server({
     verbose: true,
@@ -43,12 +43,12 @@ const exampleServer = new ipcio.Server({
   })
 ;
 
-exampleServer.start();
+exampleServer.start(); // Synchronous, it is client responsibility to poll for connection.
 ```
 
 * Create client code, name file something like `test-client.js`:
 
-```javascript
+```js
 const ipcio = require("ipcio");
 const exampleClient = new ipcio.Client({
     verbose: true,
@@ -65,18 +65,34 @@ const exampleClient = new ipcio.Client({
   }
 );
 
-exampleClient.connect();
+exampleClient
+  .connect()
+  .then(() => {
+    setInterval(() => {
+      exampleClient
+        .send("example_request_command", "example request data") // Returns promise.
+        .then(() => {
+          console.log("Example request command has just been sent.");
+        })
+      ;
+    }, 7331);    
+    setInterval(() => {
+      exampleClient
+        .send("other_request_command", "other request data") // Returns promise.
 
-setInterval(() => {
-  exampleClient.send("example_request_command", "example request data");
-}, 7331);
-
-setInterval(() => {
-  exampleClient.send("other_request_command", "other request data");
-}, 1338);
+        // If no need to perform anything when message ACK is received, we can skip calling promise thenable.
+        // .then(() => {
+        //   console.log("Example request command has just been sent.");
+        // })
+      ;
+    }, 1338);
+  
+  })
+;
 ```
 
-* Run and watch them run!
+
+* Watch them run!
 
 `$ node test-server`
 `$ node test-client`
@@ -103,14 +119,14 @@ setInterval(() => {
             * [.discover()](#module_ipcIO.Client+discover) ⇒ <code>Promise</code>
             * [.broadcast(command, data)](#module_ipcIO.Client+broadcast) ⇒ <code>Promise</code>
             * [.emit(client_name, command, data)](#module_ipcIO.Client+emit) ⇒ <code>Promise</code>
-    * [_Typedefs_](#typedefs)
-        * [parsed_message](#module_ipcIO..parsed_message) : <code>object</code>
-        * [parsed_message_array](#module_ipcIO..parsed_message_array) : <code>Array.&lt;parsed_message&gt;</code>
-        * [iface](#module_ipcIO..iface) : <code>object</code>
-        * [handler_container](#module_ipcIO..handler_container) : <code>object</code>
-        * [handler_collection](#module_ipcIO..handler_collection) : <code>object</code>
-        * [server_constructor_options](#module_ipcIO..server_constructor_options) : <code>object</code>
-        * [client_constructor_options](#module_ipcIO..client_constructor_options) : <code>object</code>
+* [Typedefs](#typedefs)
+    * [parsed_message](#module_ipcIO..parsed_message) : <code>object</code>
+    * [parsed_message_array](#module_ipcIO..parsed_message_array) : <code>Array.&lt;parsed_message&gt;</code>
+    * [iface](#module_ipcIO..iface) : <code>object</code>
+    * [handler_container](#module_ipcIO..handler_container) : <code>object</code>
+    * [handler_collection](#module_ipcIO..handler_collection) : <code>object</code>
+    * [server_constructor_options](#module_ipcIO..server_constructor_options) : <code>object</code>
+    * [client_constructor_options](#module_ipcIO..client_constructor_options) : <code>object</code>
 
 <a name="module_ipcIO.Server"></a>
 
