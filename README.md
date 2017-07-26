@@ -7,8 +7,18 @@ Basic nodejs *net* library, literally *net.Server* and *net.Socket*, can, aside 
 What makes this package worth attention, is the way of dealing with *handlers*, special functions passed to *net* classes and asynchronicity.
 Using *ipcIO*, it becomes easy to add handler at any moment of *ipcIO* server or client lifetime.
 It is possible to emit or broadcasts commands by just calling *ipcIO* `emit` or `broadcast` functionality from outside instance scope.
+Clients can send, emit or broadcasts commands being cautious whether message is ACKed by server - easy as employing i.e.
+```js
+ipcClientInstance.emit(...args).then(fn);
+// or
+await ipcClientInstance.emit(...args);
+```
+or, if we just want to let IPC deliver message and don't mind when it will happen. Just "send and forget":
+```js
+ipcClientInstance.emit(...args); // And that's it.
+```
 Servers create, within their __domain__ two levels of connectivity. First one is used to handshake and broadcast to all clients in domain, second is unique to each server-client pair.
-Much influence for me gave me __SocketIO__ project. Hence the name?
+A lot of influence gave me __SocketIO__ project. Hence the name?
 
 ## Jump-in tutorial
 
