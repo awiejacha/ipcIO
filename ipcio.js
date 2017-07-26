@@ -459,19 +459,19 @@ class IpcServer {
    *     domain: "example_domain",  // domain name,
    *     encoding: "utf8",          // message encoding.
    *   },
-   *    {
-   *      example_request_command: (container) => { // {command: function(container)}
+   *   {
+   *     example_request_command: (container) => { // {command: function(container)}
    *
-   *        // @typedef {object} container
-   *        // @property {string} data        Message data
-   *        // @property {string} client_name Friendly name of client/uuid if name not set.
-   *        // @property {Socket} socket      Instance of net.Socket
-   *        // @property {Server} server      Instance of net.Server
+   *       // @typedef {object} container
+   *       // @property {string} data        Message data
+   *       // @property {string} client_name Friendly name of client/uuid if name not set.
+   *       // @property {Socket} socket      Instance of net.Socket
+   *       // @property {Server} server      Instance of net.Server
    *
-   *        // Do handler logic here.
-   *      },
-   *    })
-   *    ;
+   *       // Do handler logic here.
+   *     },
+   *   })
+   * ;
    * ```
    * @constructor
    * @param {server_constructor_options} options    Determines operating properties and behavior.
@@ -572,6 +572,26 @@ class IpcServer {
 
   /**
    * Adds handlers at any time, regardless client state.
+   * @example
+   * ```js
+   * const exampleServer = new ipcio.Server({
+   *   // Server instantiation options
+   * });
+   *
+   * // Some code...
+   *
+   * exampleServer.addHandlers({
+   *   example_request_command: (container) => { // {command: function(container)}
+   *
+   *     // @typedef {object} container
+   *     // @property {string} data        Message data
+   *     // @property {string} client_name Friendly name of client/uuid if name not set.
+   *     // @property {Socket} socket      Instance of net.Socket
+   *
+   *     // Do handler logic here.
+   *   },
+   * });
+   * ```
    * @param {handler_collection} handler_collection Handlers to be registered.
    * @returns {module:ipcIO.IpcServer}
    */
@@ -583,6 +603,16 @@ class IpcServer {
 
   /**
    * Writes to client socket of given friendly name.
+   * @example
+   * ```js
+   * const exampleServer = new ipcio.Server({
+   *   // Server instantiation options
+   * });
+   *
+   * // Some code...
+   *
+   * exampleServer.emit("example_client", "example_command", {prop1: "prop1"});
+   * ```
    * @param {string} client_name  Friendly name of client.
    * @param {string|null} command Command description.
    * @param {string|null} data    Data carried by message.
@@ -606,6 +636,16 @@ class IpcServer {
 
   /**
    * Writes to all client sockets within server domain, except initiator client, if provided.
+   * @example
+   * ```js
+   * const exampleServer = new ipcio.Server({
+   *   // Server instantiation options
+   * });
+   *
+   * // Some code...
+   *
+   * exampleServer.broadcast("example_command", {prop1: "prop1"});
+   * ```
    * @param {string|null} command           Command description
    * @param {string|null} data              Data carried by message.
    * @param {string|null} initiator_client  Friendly name of client which initiated broadcast (if client-initiated).
@@ -859,24 +899,24 @@ class IpcClient {
    * Creates new instance of ipcIO Client.
    * @example
    * ```js
-   * const exampleServer = new ipcio.Server({
+   * const exampleClient = new ipcio.Client({
    *     verbose: true,             // Determines if actions are reported to console,
    *     name: "example_client",    // friendly client name,
    *     domain: "example_domain",  // domain name,
    *     encoding: "utf8",          // message encoding.
    *   },
-   *    {
-   *      example_request_command: (container) => { // {command: function(container)}
+   *   {
+   *     example_request_command: (container) => { // {command: function(container)}
    *
-   *        // @typedef {object} container
-   *        // @property {string} data        Message data
-   *        // @property {string} client_name Friendly name of client/uuid if name not set.
-   *        // @property {Socket} socket      Instance of net.Socket
+   *       // @typedef {object} container
+   *       // @property {string} data        Message data
+   *       // @property {string} client_name Friendly name of client/uuid if name not set.
+   *       // @property {Socket} socket      Instance of net.Socket
    *
-   *        // Do handler logic here.
-   *      },
-   *    })
-   *    ;
+   *       // Do handler logic here.
+   *     },
+   *   })
+   * ;
    * ```
    * @constructor
    * @param {client_constructor_options} options    Determines operating properties and behavior.
@@ -1028,6 +1068,26 @@ class IpcClient {
 
   /**
    * Adds handlers at any time, regardless client state.
+   * @example
+   * ```js
+   * const exampleClient = new ipcio.Client({
+   *   // Client instantiation options
+   * });
+   *
+   * // Some code...
+   *
+   * exampleClient.addHandlers({
+   *   example_request_command: (container) => { // {command: function(container)}
+   *
+   *     // @typedef {object} container
+   *     // @property {string} data        Message data
+   *     // @property {string} client_name Friendly name of client/uuid if name not set.
+   *     // @property {Socket} socket      Instance of net.Socket
+   *
+   *     // Do handler logic here.
+   *   },
+   * });
+   * ```
    * @param {handler_collection} handler_collection Handlers to be registered at construction time.
    * @returns {module:ipcIO.IpcClient}
    */
@@ -1057,6 +1117,21 @@ class IpcClient {
    * Puts command with data queue, calls queue handler.<br>
    * Command is sent immediately to server when there is connection established and previous entries become sent.<br>
    * Returned promise is fulfilled when message was successfully received by server.
+   * @example
+   * ```js
+   * const exampleClient = new ipcio.Client({
+   *   // Client instantiation options
+   * });
+   *
+   * // Some code...
+   *
+   * exampleClient
+   *   .send("example_command", {prop1: "prop1"})
+   *   .then(() => {
+   *     // Do something when message is successfully sent to server.
+   *   })
+   * ;
+   * ```
    * @param {string|null} command Command description
    * @param {string|null} data    Data carried by message
    * @returns {Promise}
@@ -1073,6 +1148,22 @@ class IpcClient {
    * Puts command with data to broadcast socket queue, calls queue handler.<br>
    * Command is emitted immediately when there is connection established and previous entries become emitted.<br>
    * Returned promise for server discovery info is fulfilled on discover response from server.
+   * @example
+   * ```js
+   * const exampleClient = new ipcio.Client({
+   *   // Client instantiation options
+   * });
+   *
+   * // Some code...
+   *
+   * exampleClient
+   *   .discover()
+   *   .then((result) => {
+   *     console.log(result); // { clients: [ 'example_client' ],
+   *                          // command_handlers: [ 'example_request_command', 'other_request_command' ] }
+   *   })
+   * ;
+   * ```
    * @returns {Promise}
    */
   discover() {
@@ -1093,6 +1184,21 @@ class IpcClient {
    * Puts command with data to broadcast socket queue, calls queue handler.<br>
    * Command is emitted immediately when there is connection established and previous entries become emitted.<br>
    * Returned promise is fulfilled when message was successfully received by server.
+   * @example
+   * ```js
+   * const exampleClient = new ipcio.Client({
+   *   // Client instantiation options
+   * });
+   *
+   * // Some code...
+   *
+   * exampleClient
+   *   .broadcast("example_command", {prop1: "prop1"})
+   *   .then(() => {
+   *     // Do something when broadcast is successfully received by server.
+   *   })
+   * ;
+   * ```
    * @param {string|null} command Command description
    * @param {string|null} data    Data carried by message.
    * @returns {Promise}
@@ -1113,6 +1219,21 @@ class IpcClient {
    * Puts command with data to broadcast socket queue, calls queue handler.<br>
    * Command is emitted immediately when there is connection established and previous entries become emitted.<br>
    * Returned promise is fulfilled when message was successfully received by server.
+   * @example
+   * ```js
+   * const exampleClient = new ipcio.Client({
+   *   // Client instantiation options
+   * });
+   *
+   * // Some code...
+   *
+   * exampleClient
+   *   .emit("example_client", "example_command", {prop1: "prop1"})
+   *   .then(() => {
+   *     // Do something when message is successfully emitted to server (NOT emitted further by server do destination).
+   *   })
+   * ;
+   * ```
    * @param {string} client_name  Friendly name of client.
    * @param {string|null} command Command description
    * @param {string|null} data    Data carried by message
