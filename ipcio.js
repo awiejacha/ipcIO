@@ -8,6 +8,7 @@
  * @property {string|null} id       Client id, that server is tagging handshake message with.
  * @property {string|null} command  Command description.
  * @property {string|null} data     Data carried by message.
+ * @property {string|null} delivery Delivery id
  */
 
 /**
@@ -64,6 +65,7 @@ const COMMAND_HANDSHAKE = "handshake";
 const COMMAND_DISCOVER = "discover";
 const COMMAND_BROADCAST = "broadcast";
 const COMMAND_EMIT = "emit";
+const COMMAND_DELIVER = "delivery";
 const COMMAND_ERROR = "error";
 
 const E_MESSAGE_NOT_JSON = 101;
@@ -74,12 +76,64 @@ const E_CLIENT_NAME_TAKEN = 201;
 const bcast_registry = {};
 
 /**
+ * @param line
+ * @returns {string|boolean|number}
+ */
+function formatConsoleOutput(line) {
+  if (line instanceof Buffer) {
+    line = line.toString();
+  }
+
+  return (
+    typeof line !== "string" &&
+    typeof line !== "boolean" &&
+    typeof line !== "number" &&
+    line !== null &&
+    line !== undefined
+  ) ? JSON.stringify(line, null, "  ") : line;
+}
+
+/**
  * @param args
  * @ignore
  */
 function feedConsole(...args) {
   if (this.verbose) {
-    console.log(...args);
+    args.forEach((line) => {
+      console.log(`\x1b[36m${formatConsoleOutput(line)}\x1b[0m`); // Cyan
+    });
+  }
+}
+
+/**
+ * @param args
+ * @ignore
+ */
+function feedConsoleError(...args) {
+  if (this.verbose) {
+    args.forEach((line) => {
+      console.log(`\x1b[1m\x1b[31m${formatConsoleOutput(line)}\x1b[0m`); // Bright red
+    });
+  }
+}
+
+/**
+ * @param args
+ * @ignore
+ */
+function feedConsoleLines(...args) {
+  if (this.verbose) {
+    args.forEach((line, idx) => {
+      if (idx === 0) {
+        console.log(`\x1b[1m${formatConsoleOutput(line)}\x1b[0m`); // 1st line is highlighted.
+      }
+      else if (idx === 1) {
+        console.log(`\x1b[33m${formatConsoleOutput(line)}\x1b[0m`); // 2nd is regular yellow.
+      }
+      else {
+        console.log(`\x1b[2m${formatConsoleOutput(line)}\x1b[0m`); // Rest is dimmed white.
+      }
+    });
   }
 }
 
@@ -113,6 +167,7 @@ function parseMsg(message) {
             id: entry.id || null,
             command: entry.command || null,
             data: entry.data || null,
+            delivery: entry.delivery || null,
           };
         }
 
@@ -122,6 +177,7 @@ function parseMsg(message) {
             id: null,
             command: null,
             data: entry,
+            delivery: null,
           };
         }
       });
@@ -131,6 +187,7 @@ function parseMsg(message) {
         id: null,
         command: COMMAND_ERROR,
         data: E_MESSAGE_NOT_ARRAY,
+        delivery: null,
       }];
     }
   }
@@ -139,6 +196,7 @@ function parseMsg(message) {
       id: null,
       command: COMMAND_ERROR,
       data: E_MESSAGE_NOT_JSON,
+      delivery: null,
     }];
   }
 }
@@ -152,28 +210,36 @@ function prepareMsg() {
   if (arguments.length === 0) {
     throw new Error("No arguments passed.");
   }
-
-  if (arguments.length === 1) {
+  else if (arguments.length === 1) {
     return JSON.stringify({
       id: null,
       command: null,
       data: arguments[0],
+      delivery: null,
     });
   }
-
-  if (arguments.length === 2) {
+  else if (arguments.length === 2) {
     return JSON.stringify({
       id: null,
       command: (arguments[0] === null || arguments[0] === undefined) ? null : arguments[0].toString(),
       data: arguments[1],
+      delivery: null,
     });
   }
-
-  if (arguments.length >= 3) {
+  else if (arguments.length === 3) {
     return JSON.stringify({
       id: (arguments[0] === null || arguments[0] === undefined) ? null : arguments[0].toString(),
-      command: (arguments[0] === null || arguments[0] === undefined) ? null : arguments[1].toString(),
+      command: (arguments[1] === null || arguments[1] === undefined) ? null : arguments[1].toString(),
       data: arguments[2],
+      delivery: null,
+    });
+  }
+  else {
+    return JSON.stringify({
+      id: (arguments[0] === null || arguments[0] === undefined) ? null : arguments[0].toString(),
+      command: (arguments[1] === null || arguments[1] === undefined) ? null : arguments[1].toString(),
+      data: arguments[2],
+      delivery: arguments[3],
     });
   }
 }
@@ -185,12 +251,18 @@ function prepareMsg() {
  * @param {string} client_name      Friendly client name
  * @param {iface} iface             Communication interface exposed to handler.
  * @param {parsed_message} message  Message to be processed by handler
+ * @returns {null|*}                When there is delivery id and return value is defined, value will be sent back.
  * @ignore
  */
 function executeCommandHandlers(uuid, client_name, iface, message) {
+
+  feedConsoleLines.call(this, "HANDLER EXEC", `socket: ${uuid}, client: ${client_name}`, message);
+
+  let ret = null;
+
   if (typeof message === "object" && message !== null && message.command !== null && message.command !== undefined) {
     if (this._command_handlers[message.command] !== undefined) {
-      this._command_handlers[message.command].call(this, {
+      ret = this._command_handlers[message.command].call(this, {
         data: message.data,
         uuid: uuid,
         name: client_name,
@@ -199,6 +271,8 @@ function executeCommandHandlers(uuid, client_name, iface, message) {
       });
     }
   }
+
+  return ret === undefined ? null : ret;
 }
 
 /**
@@ -209,10 +283,25 @@ function executeCommandHandlers(uuid, client_name, iface, message) {
  * @ignore
  */
 function addCommandHandler(command, handler) {
+
+  feedConsoleLines.call(this, "HANDLER ADD", `command: ${command}`);
+
   if (typeof command !== "string") {
     throw new Error("Argument passed as \"command\" must be a string.");
   }
 
+  if (
+    [
+      COMMAND_HANDSHAKE,
+      COMMAND_DISCOVER,
+      COMMAND_BROADCAST,
+      COMMAND_EMIT,
+      COMMAND_DELIVER,
+      COMMAND_ERROR,
+    ].indexOf(command) > -1
+  ) {
+    throw new Error("Argument passed as \"command\" is restricted command name.");
+  }
   if (typeof handler !== "function") {
     throw new Error("Argument passed as \"handler\" must be a function.");
   }
@@ -246,25 +335,6 @@ function addHandlers(handler_collection) {
 }
 
 /**
- * On "data" event handler for IpcServer and IpcClient unique socket.<br>
- * Always called with "this" bound to either IpcServer or IpcClient instance.
- * @param {string} uuid         Unique id of socket used for 1 to 1 communication with server, UUDv4/wo dashes.
- * @param {string} client_name  Friendly name of client, if passed into client constructor, otherwise UUDv4/wo dashes.
- * @param {iface} iface         Interface containing socket instance and server instance.
- * @param {Buffer} buffer       Data buffer received from remote party with "data" event.
- * @ignore
- */
-function $onUniqueData(uuid, client_name, iface, buffer) {
-
-  feedConsole.call(this, `Unique received: ${buffer.toString()}`);
-
-  let message_array = parseMsg(buffer);
-  message_array.forEach((message) => {
-    executeCommandHandlers.call(this, uuid, client_name, iface, message);
-  }, this);
-}
-
-/**
  * On "connect" event handler for IpcServer broadcast socket creation callback.<br>
  * Always called with "this" bound to IpcServer instance.
  * @param {Socket} bcastSocket
@@ -274,6 +344,8 @@ function $onServerBcastCreation(bcastSocket) {
 
   // Give each client unique id. Id will also be used to establish private communication channel.
   let uuid = uuidV4().replace(/-/g, "");
+
+  feedConsoleLines.call(this, "SRV BCAST CREATE", `uuid: ${uuid}`);
 
   // Assign clientBcastSocket to broadcast sockets registry.
   if (bcast_registry[this._domain] === undefined) {
@@ -297,9 +369,10 @@ function $onServerBcastCreation(bcastSocket) {
  * @ignore
  */
 function $onServerBcastData(uuid, bcastSocket, buffer) {
-  let message_array = parseMsg(buffer); // TODO: Handle possible error message.
 
-  feedConsole.call(this, `${this._domain}: RECV ${JSON.stringify(message_array)}`);
+  feedConsoleLines.call(this, "SRV BCAST DATA", `socket: ${uuid}`, buffer);
+
+  let message_array = parseMsg(buffer); // TODO: Handle possible error message.
 
   message_array.forEach((message) => {
     let client_name = null;
@@ -312,7 +385,7 @@ function $onServerBcastData(uuid, bcastSocket, buffer) {
 
         if (this._name_registry[client_name]) {
 
-          feedConsole.call(this, `Sending error response, client name ${client_name} is already taken.`);
+          feedConsoleError.call(this, `Sending error response, client name ${client_name} is already taken.`);
 
           bcastSocket.write(prepareMsg(client_name, COMMAND_ERROR, E_CLIENT_NAME_TAKEN), this._encoding);
 
@@ -321,10 +394,11 @@ function $onServerBcastData(uuid, bcastSocket, buffer) {
 
         this._name_registry[client_name] = uuid;
         this._uuid_registry[uuid] = {};
+        this._uuid_registry[uuid].name = client_name;
         this._uuid_registry[uuid].server = net.createServer($onServerUniqueCreation.bind(this, uuid, client_name));
         this._uuid_registry[uuid].server.listen(`${this._bcast_path}.${uuid}`);
 
-        feedConsole.call(this, `Client uuid server listening on ${this._bcast_path}.${uuid}`);
+        feedConsoleLines.call(this, "CLI UNIQUE LISTEN", `path: ${this._bcast_path}.${uuid}`);
         feedConsole.call(this, `Sending channel uuid ${uuid} to client ${client_name}.`);
 
         bcastSocket.write(prepareMsg(client_name, COMMAND_HANDSHAKE, uuid), this._encoding);
@@ -346,9 +420,6 @@ function $onServerBcastData(uuid, bcastSocket, buffer) {
         break;
 
       case COMMAND_BROADCAST:
-
-        feedConsole.call(this, `Broadcasting ${message.data}.`);
-
         let message_to_be_bcasted = parseMsg(message.data)[0]; // TODO: Handle possible error message.
         this.broadcast(message_to_be_bcasted.command, message_to_be_bcasted.data);
 
@@ -357,10 +428,17 @@ function $onServerBcastData(uuid, bcastSocket, buffer) {
       case COMMAND_EMIT:
         client_name = message.id;
 
-        feedConsole.call(this, `Emitting ${message.data}, to client ${client_name}.`);
+        if (message.delivery !== null) {
+          this._delivery_registry[message.delivery] = client_name;
+        }
 
         let message_to_be_emitted = parseMsg(message.data)[0]; // TODO: Handle possible error message.
-        this.emit(message_to_be_emitted.id, message_to_be_emitted.command, message_to_be_emitted.data);
+        this.emit(
+          message_to_be_emitted.id,
+          message_to_be_emitted.command,
+          message_to_be_emitted.data,
+          message_to_be_emitted.delivery
+        );
     }
   }, this);
 }
@@ -372,6 +450,9 @@ function $onServerBcastData(uuid, bcastSocket, buffer) {
  * @ignore
  */
 function $onServerBcastClose(uuid) {
+
+  feedConsoleLines.call(this, "SRV BCAST CLS", `socket: ${uuid}`);
+
   if (bcast_registry[this._domain][uuid] !== undefined) {
     delete bcast_registry[this._domain][uuid];
   }
@@ -383,8 +464,9 @@ function $onServerBcastClose(uuid) {
  * @ignore
  */
 function $onServerBcastError(error) {
-  // TODO: Handle this.
-  feedConsole.call(this, error);
+
+  feedConsoleLines.call(this, "SRV BCAST ERR", error);
+
 }
 
 /**
@@ -397,6 +479,9 @@ function $onServerBcastError(error) {
  * @ignore
  */
 function $onServerUniqueCreation(uuid, client_name, serverUniqueSocket) {
+
+  feedConsoleLines.call(this, "SRV UNIQUE CREATE", `socket: ${uuid}, client: ${client_name}`);
+
   this._uuid_registry[uuid].socket = serverUniqueSocket;
   this._uuid_registry[uuid].socket._populated_handlers = {};
   this._uuid_registry[uuid].socket.writeCommand = function (command, data, callback) {
@@ -408,10 +493,55 @@ function $onServerUniqueCreation(uuid, client_name, serverUniqueSocket) {
   this._uuid_registry[uuid].server.close();
 
   serverUniqueSocket
-    .on("data", $onUniqueData.bind(this, uuid, client_name, this._uuid_registry[uuid]))
+    .on("data", $onServerUniqueData.bind(this, uuid, client_name, this._uuid_registry[uuid]))
     .on("close", $onServerUniqueClose.bind(this, uuid, client_name))
     .on("error", $onServerUniqueError.bind(this))
   ;
+}
+
+/**
+ * On "data" event handler for IpcServer unique socket.<br>
+ * Always called with "this" bound to IpcServer instance.
+ * @param {string} uuid         Unique id of socket used for 1 to 1 communication with server, UUDv4/wo dashes.
+ * @param {string} client_name  Friendly name of client, if passed into client constructor, otherwise UUDv4/wo dashes.
+ * @param {iface} iface         Interface containing socket instance and server instance.
+ * @param {Buffer} buffer       Data buffer received from remote party with "data" event.
+ * @ignore
+ */
+function $onServerUniqueData(uuid, client_name, iface, buffer) {
+
+  feedConsoleLines.call(this, "SRV UNIQUE DATA", `socket: ${uuid}, client: ${client_name}`, buffer);
+
+  let message_array = parseMsg(buffer);
+  message_array.forEach((message) => {
+
+    // Handle deliver command from consumer client to producer client.
+    if (message.command === COMMAND_DELIVER) {
+      if (message.delivery !== null && this._delivery_registry[message.delivery] !== undefined) {
+        let client_name = this._delivery_registry[message.delivery];
+        this.emit(client_name, COMMAND_DELIVER, message.data, message.delivery);
+        delete this._delivery_registry[message.delivery];
+
+        return;
+      }
+    }
+
+    // Handle custom client command when handler registered.
+    let ret = executeCommandHandlers.call(this, uuid, client_name, iface, message);
+
+    if (message.delivery !== null) {
+      // There is delivery id attached, that means that sender wants to be notified with result that is returned.
+
+      if (ret === undefined) {
+        // It is possible, that command handler is not returning anything despite sender asks for delivery.
+        // In such case, we are just to deliver null, but deliverance will be confirmed,
+        // and promise for it will become fulfilled on sender side.
+        ret = null;
+      }
+
+      this.emit(client_name, COMMAND_DELIVER, ret, message.delivery);
+    }
+  }, this);
 }
 
 /**
@@ -422,8 +552,15 @@ function $onServerUniqueCreation(uuid, client_name, serverUniqueSocket) {
  * @ignore
  */
 function $onServerUniqueClose(uuid, client_name) {
+
+  feedConsoleLines.call(this, "SRV UNIQUE CLS", `socket: ${uuid}, client: ${client_name}`);
+
   if (this._name_registry[client_name] !== undefined) {
     delete this._name_registry[client_name];
+  }
+
+  if (this._uuid_registry[uuid].name !== undefined) {
+    delete this._uuid_registry[uuid].name;
   }
 
   if (this._uuid_registry[uuid].server !== undefined) {
@@ -441,8 +578,9 @@ function $onServerUniqueClose(uuid, client_name) {
  * @ignore
  */
 function $onServerUniqueError(error) {
-  // TODO: Handle this.
-  feedConsole.call(this, error);
+
+  feedConsoleLines.call(this, "SRV UNIQUE ERR", error);
+
 }
 
 /**
@@ -499,6 +637,13 @@ class IpcServer {
     this._uuid_registry = {};
 
     /**
+     * Registry of deliveries, keyed by client names.
+     * @type {object}
+     * @private
+     */
+    this._delivery_registry = {};
+
+    /**
      * Message encoding
      * @type {string}
      * @private
@@ -552,6 +697,9 @@ class IpcServer {
    * @throws Error If this method was called before and IpcServer instance is already started.
    */
   start() {
+
+    feedConsole.call(this, "SRV CLASS.start()");
+
     if (this._is_started) {
       throw new Error(`Tried to start IPC server for domain ${this._domain}, that has already started.`);
     }
@@ -563,7 +711,7 @@ class IpcServer {
     this._bcastServer = net.createServer($onServerBcastCreation.bind(this));
     this._bcastServer.listen(this._bcast_path);
 
-    feedConsole.call(this, `Broadcast server listening on ${this._bcast_path}`);
+    feedConsoleLines.call(this, "SRV BCAST LISTEN", `path: ${this._bcast_path}`);
 
     this._is_started = true;
 
@@ -613,12 +761,17 @@ class IpcServer {
    *
    * exampleServer.emit("example_client", "example_command", {prop1: "prop1"});
    * ```
-   * @param {string} client_name  Friendly name of client.
-   * @param {string|null} command Command description.
-   * @param {string|null} data    Data carried by message.
+   * @param {string} client_name    Friendly name of client.
+   * @param {string|null} command   Command description.
+   * @param {string|null} data      Data carried by message.
+   * @param {string|null} delivery  Id of delivery of message that needs to be confirmed with response data.
+   *                                Practically used with COMMAND_DELIVER.
    * @returns {module:ipcIO.IpcServer}
    */
-  emit(client_name, command, data) {
+  emit(client_name, command, data, delivery = null) {
+
+    feedConsole.call(this, `SRV CLASS.emit(${client_name}, ${command}, ${JSON.stringify(data)}, ${delivery})`);
+
     if (
       client_name in this._name_registry && // We have such friendly name,
       typeof this._name_registry[client_name] === "string" && // really a name,
@@ -627,7 +780,7 @@ class IpcServer {
       this._uuid_registry[this._name_registry[client_name]].socket.writable // that is writable.
     ) {
       this._uuid_registry[this._name_registry[client_name]].socket.write(
-        prepareMsg(command, data), this._encoding
+        prepareMsg(null, command, data, delivery), this._encoding
       );
     }
 
@@ -652,6 +805,9 @@ class IpcServer {
    * @returns {module:ipcIO.IpcServer}
    */
   broadcast(command, data, initiator_client = null) {
+
+    feedConsole.call(this, `SRV CLASS.broadcast(${command}, ${JSON.stringify(data)}, ${initiator_client})`);
+
     for (let uuid in this._uuid_registry) {
       if (initiator_client && this._name_registry[initiator_client] === uuid) {
         continue;
@@ -778,6 +934,8 @@ function handleBcastQueue() {
  */
 function $onClientOffline() {
 
+  feedConsoleLines.call(this, "CLI OFFLINE");
+
   // We are offline, so we are not connected.
   // We will attempt to connect after timeout, assigned few lines below, so not connecting yet.
   this._is_connected = false;
@@ -832,7 +990,7 @@ function $onClientOffline() {
  */
 function $onClientBcastConnect(resolve) {
 
-  feedConsole.call(this, `Connected to broadcast server ${this._bcast_path}`);
+  feedConsoleLines.call(this, "CLI BCAST CONNECT", `path: ${this._bcast_path}`);
 
   // Server has connected us, so If any timeout with reconnect handler is still set, clear it.
   if (this._offlinePollingFn !== null) {
@@ -870,6 +1028,8 @@ function $onClientBcastConnect(resolve) {
  */
 function $onClientUniqueConnect(resolve) {
 
+  feedConsole.call(this, "CLI UNIQUE CONNECT", `socket: ${this._channel_id}`);
+
   // Client unique socket has just been hand-shaken therefore we have stopped connecting and are connected.
   this._is_connecting = false;
   this._is_connected = true;
@@ -878,16 +1038,58 @@ function $onClientUniqueConnect(resolve) {
     resolve(); // Fulfills promise returned by IpcClient#connect.
   }
 
-  feedConsole.call(this, `Connected to unique server ${this._bcast_path}.${this._channel_id}`);
-
   handleQueue.call(this);
 
   this._uniqueSocket
-    .on("data", $onUniqueData.bind(this, this._channel_id, this._client_name, {
+    .on("data", $onClientUniqueData.bind(this, this._channel_id, this._client_name, {
       socket: this._uniqueSocket,
       server: this._uniqueSocket.server || null,
     }))
   ;
+}
+
+/**
+ * On "data" event handler for IpcClient unique socket.<br>
+ * Always called with "this" bound to either IpcClient instance.
+ * @param {string} uuid         Unique id of socket used for 1 to 1 communication with server, UUDv4/wo dashes.
+ * @param {string} client_name  Friendly name of client, if passed into client constructor, otherwise UUDv4/wo dashes.
+ * @param {iface} iface         Interface containing socket instance and server instance.
+ * @param {Buffer} buffer       Data buffer received from remote party with "data" event.
+ * @ignore
+ */
+function $onClientUniqueData(uuid, client_name, iface, buffer) {
+
+  feedConsoleLines.call(this, "CLI UNIQUE DATA", `socket: ${uuid}, client: ${client_name}`, buffer);
+
+  let message_array = parseMsg(buffer);
+  message_array.forEach((message) => {
+
+    // Handle deliver command from consumer client to producer client.
+    if (message.command === COMMAND_DELIVER) {
+      if (message.delivery !== null && typeof this._deliveries[message.delivery] === "function") {
+        this._deliveries[message.delivery](message.data); // Fulfills promise for delivery.
+        this._deliveries[message.delivery] = undefined;
+
+        return;
+      }
+    }
+
+    // Handle custom client command when handler registered.
+    let ret = executeCommandHandlers.call(this, uuid, client_name, iface, message);
+
+    if (message.delivery !== null) {
+      // There is delivery id attached, that means that sender wants to be notified with result that is returned.
+
+      if (ret === undefined) {
+        // It is possible, that command handler is not returning anything despite sender asks for delivery.
+        // In such case, we are just to deliver null, but deliverance will be confirmed,
+        // and promise for it will become fulfilled on sender side.
+        ret = null;
+      }
+
+      this.send(COMMAND_DELIVER, ret, message.delivery);
+    }
+  }, this);
 }
 
 /**
@@ -1054,6 +1256,13 @@ class IpcClient {
     this._discoverPromiseResolve = null;
 
     /**
+     * Collection of delivery promise resolve functions, keyed by delivery id.
+     * @type {object}
+     * @private
+     */
+    this._deliveries = {};
+
+    /**
      * Message encoding
      * @type {string}
      * @private
@@ -1102,6 +1311,9 @@ class IpcClient {
    * @returns {Promise} Promise for client unique socket connection
    */
   connect() {
+
+    feedConsole.call(this, "CLI CLASS.connect()");
+
     if (this._is_connecting || this._is_connected) {
       throw new Error(`Tried to connect to IPC server for domain ${this._domain}, when already connected/ing.`);
     }
@@ -1132,13 +1344,18 @@ class IpcClient {
    *   })
    * ;
    * ```
-   * @param {string|null} command Command description
-   * @param {string|null} data    Data carried by message
+   * @param {string|null} command   Command description
+   * @param {string|null} data      Data carried by message
+   * @param {string|null} delivery  Id of delivery of message that needs to be confirmed with response data.
+   *                                Practically used with COMMAND_DELIVER.
    * @returns {Promise}
    */
-  send(command, data) {
+  send(command, data, delivery = null) {
+
+    feedConsole.call(this, `CLI CLASS.send(${command}, ${JSON.stringify(data)}, ${delivery})`);
+
     return new Promise((resolve) => {
-      this._queue.push([prepareMsg(command, data), resolve]);
+      this._queue.push([prepareMsg(null, command, data, delivery), resolve]);
       handleQueue.call(this);
     });
   }
@@ -1167,6 +1384,9 @@ class IpcClient {
    * @returns {Promise}
    */
   discover() {
+
+    feedConsole.call(this, "CLI CLASS.discover()");
+
     if (!this._is_discovering) {
       this._discoverPromise = new Promise((resolve) => {
         this._is_discovering = true;
@@ -1204,6 +1424,9 @@ class IpcClient {
    * @returns {Promise}
    */
   broadcast(command, data) {
+
+    feedConsole.call(this, `CLI CLASS.broadcast(${command}, ${JSON.stringify(data)})`);
+
     return new Promise((resolve) => {
       this._bcast_queue.push([prepareMsg(
         this._client_name,
@@ -1240,13 +1463,46 @@ class IpcClient {
    * @returns {Promise}
    */
   emit(client_name, command, data) {
+
+    feedConsole.call(this, `CLI CLASS.emit(${client_name}, ${command}, ${JSON.stringify(data)})`);
+
     return new Promise((resolve) => {
       this._bcast_queue.push([prepareMsg(
-        client_name,
+        this._client_name,
         COMMAND_EMIT,
-        prepareMsg(command, data)
+        prepareMsg(client_name, command, data)
       ), resolve]);
       handleBcastQueue.call(this);
+    });
+  }
+
+  deliver(client_name, command, data) {
+
+    feedConsole.call(this, `CLI CLASS.deliver(${client_name}, ${command}, ${JSON.stringify(data)})`);
+
+    if (data === undefined) {
+      data = command;
+      command = client_name;
+      client_name = null;
+    }
+    let delivery = uuidV4().replace(/-/g, "");
+
+    return new Promise((resolve) => {
+      this._deliveries[delivery] = resolve;
+
+      if (client_name !== null) { // Our client emits to client of given name, so we are emitting to bcast socket.
+        this._bcast_queue.push([prepareMsg(
+          this._client_name,
+          COMMAND_EMIT,
+          prepareMsg(client_name, command, data, delivery),
+          delivery
+        )]);
+        handleBcastQueue.call(this);
+      }
+      else { // No client name specified, this is just a request to server.
+        this._queue.push([prepareMsg(null, command, data, delivery)]);
+        handleQueue.call(this);
+      }
     });
   }
 }
