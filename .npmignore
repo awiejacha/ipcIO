@@ -28,3 +28,4 @@ out
 gen
 .git
 test-*.js
+API.md

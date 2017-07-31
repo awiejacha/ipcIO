@@ -1,6 +1,6 @@
 {
   "name": "ipcio",
-  "version": "0.6.0",
+  "version": "0.6.2",
   "description": "Server and client for unix-domain-based inter-process-communication (IPC).",
   "main": "ipcio.js",
   "scripts": {
