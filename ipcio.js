@@ -65,7 +65,7 @@ const COMMAND_HANDSHAKE = "handshake";
 const COMMAND_DISCOVER = "discover";
 const COMMAND_BROADCAST = "broadcast";
 const COMMAND_EMIT = "emit";
-const COMMAND_DELIVER = "delivery";
+const COMMAND_DELIVER = "deliver";
 const COMMAND_ERROR = "error";
 
 const E_MESSAGE_NOT_JSON = 101;
@@ -78,6 +78,7 @@ const bcast_registry = {};
 /**
  * @param line
  * @returns {string|boolean|number}
+ * @ignore
  */
 function formatConsoleOutput(line) {
   if (line instanceof Buffer) {
@@ -539,7 +540,12 @@ function $onServerUniqueData(uuid, client_name, iface, buffer) {
         ret = null;
       }
 
-      this.emit(client_name, COMMAND_DELIVER, ret, message.delivery);
+      // Promisify if yet not a promise.
+      ret = ret instanceof Promise ? ret : Promise.resolve(ret);
+
+      ret.then((feedback) => {
+        this.emit(client_name, COMMAND_DELIVER, feedback, message.delivery);
+      });
     }
   }, this);
 }
@@ -689,6 +695,14 @@ class IpcServer {
     if (handler_collection) {
       this.addHandlers(handler_collection);
     }
+  }
+
+  /**
+   * Checks if server is started.
+   * @returns {boolean} True when server is started via IpcIO.Server#start() call.
+   */
+  isStarted() {
+    return this._is_started;
   }
 
   /**
@@ -1087,7 +1101,12 @@ function $onClientUniqueData(uuid, client_name, iface, buffer) {
         ret = null;
       }
 
-      this.send(COMMAND_DELIVER, ret, message.delivery);
+      // Promisify if yet not a promise.
+      ret = ret instanceof Promise ? ret : Promise.resolve(ret);
+
+      ret.then((feedback) => {
+        this.send(COMMAND_DELIVER, feedback, message.delivery);
+      });
     }
   }, this);
 }
@@ -1111,9 +1130,9 @@ class IpcClient {
    *     example_request_command: (container) => { // {command: function(container)}
    *
    *       // @typedef {object} container
-   *       // @property {string} data        Message data
-   *       // @property {string} client_name Friendly name of client/uuid if name not set.
-   *       // @property {Socket} socket      Instance of net.Socket
+   *       // @property {string} data   Message data
+   *       // @property {string} name   Friendly name of client/uuid if name not set.
+   *       // @property {Socket} socket Instance of net.Socket
    *
    *       // Do handler logic here.
    *     },
@@ -1276,6 +1295,22 @@ class IpcClient {
   }
 
   /**
+   * Checks if client is connected.
+   * @returns {boolean} True when connection is established.
+   */
+  isConnected() {
+    return this._is_connected;
+  }
+
+  /**
+   * Checks if client is started by calling IpcIO.Client#connect().
+   * @returns {boolean} True when connected or attempting to (re)connect.
+   */
+  isStarted() {
+    return this._is_connected || this._is_connecting;
+  }
+
+  /**
    * Adds handlers at any time, regardless client state.
    * @example
    * ```js
@@ -1289,9 +1324,9 @@ class IpcClient {
    *   example_request_command: (container) => { // {command: function(container)}
    *
    *     // @typedef {object} container
-   *     // @property {string} data        Message data
-   *     // @property {string} client_name Friendly name of client/uuid if name not set.
-   *     // @property {Socket} socket      Instance of net.Socket
+   *     // @property {string} data   Message data
+   *     // @property {string} name   Friendly name of client/uuid if name not set.
+   *     // @property {Socket} socket Instance of net.Socket
    *
    *     // Do handler logic here.
    *   },
@@ -1457,7 +1492,7 @@ class IpcClient {
    *   })
    * ;
    * ```
-   * @param {string} client_name  Friendly name of client.
+   * @param {string} client_name  Friendly name of client
    * @param {string|null} command Command description
    * @param {string|null} data    Data carried by message
    * @returns {Promise}
@@ -1476,6 +1511,33 @@ class IpcClient {
     });
   }
 
+  /**
+   * Requests server to write command, to client with name given as first argument.<br>
+   * Command write is then confirmed, using reserved deliver command, when command processing is finished
+   * on the remote side and delivered back to requester client.<br>
+   * When client_name is omitted, deliver is performed to server.
+   * Command is emitted immediately when there is connection established and previous entries become emitted.<br>
+   * Returned promise is fulfilled when message was successfully received and processed by destination party.
+   * @example
+   * ```js
+   * const exampleClient = new ipcio.Client({
+   *   // Client instantiation options
+   * });
+   *
+   * // Some code...
+   *
+   * exampleClient
+   *   .deliver("example_client", "example_command", {prop1: "prop1"})
+   *   .then((feedback) => {
+   *     console.log(`We know that delivery is confirmed and we have a ${feedback}.`);
+   *   })
+   * ;
+   * ```
+   * @param {string} client_name  Friendly name of client
+   * @param {string|null} command Command description
+   * @param {string|null} data    Data carried by message
+   * @returns {Promise}
+   */
   deliver(client_name, command, data) {
 
     feedConsole.call(this, `CLI CLASS.deliver(${client_name}, ${command}, ${JSON.stringify(data)})`);

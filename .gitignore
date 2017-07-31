@@ -24,3 +24,4 @@ typings/
 .env
 .idea
 test-*.js
+API.md
